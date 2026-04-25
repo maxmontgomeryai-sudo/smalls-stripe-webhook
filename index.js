@@ -5,17 +5,35 @@ app.use(express.json());
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
+// Log ALL incoming requests
+app.use((req, res, next) => {
+  console.log('=== INCOMING REQUEST ===');
+  console.log('Method:', req.method);
+  console.log('Path:', req.path);
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  next();
+});
+
 app.post('/order', async (req, res) => {
   try {
     const body = req.body;
-    
-    // Extract order details from Vapi webhook
+    const messageType = body?.message?.type;
+    console.log('Message type:', messageType);
+
+    // Only process end of call
+    if (messageType !== 'end-of-call-report') {
+      return res.json({ success: true, skipped: true });
+    }
+
     const transcript = body?.message?.artifact?.transcript || '';
     const customerName = extractName(transcript);
     const items = extractItems(transcript);
     const total = extractTotal(transcript);
 
-    // Save to Supabase
+    console.log('Customer:', customerName);
+    console.log('Items:', items);
+    console.log('Total:', total);
+
     const response = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
       method: 'POST',
       headers: {
@@ -31,9 +49,11 @@ app.post('/order', async (req, res) => {
       })
     });
 
+    console.log('Supabase response status:', response.status);
     res.json({ success: true });
+
   } catch (error) {
-    console.error(error);
+    console.error('Error:', error.message);
     res.json({ success: false, error: error.message });
   }
 });
@@ -49,7 +69,7 @@ function extractItems(transcript) {
     'Original Combo 1', 'Original Combo 2', 'Original Combo 3', 'Original Combo 4',
     'Biggie Smalls Combo', 'BBQ Combo 1', 'BBQ Combo 2', 'BBQ Combo 3',
     'Original Slider', 'BBQ Bacon Jalapeno Slider', 'Waffle Fries',
-    'Queso', 'Chocolate Milkshake', 'Strawberry Milkshake', 
+    'Queso', 'Chocolate Milkshake', 'Strawberry Milkshake',
     'Cookies and Cream Milkshake', 'Smauce', 'Party Pack', 'Tray of Fries'
   ];
   menuItems.forEach(item => {
