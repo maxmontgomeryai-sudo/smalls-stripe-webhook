@@ -1,101 +1,84 @@
-const express = require('express');
-const app = express();
-app.use(express.json());
-
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
-app.use((req, res, next) => {
-  console.log('=== INCOMING REQUEST ===');
-  console.log('Method:', req.method);
-  console.log('Path:', req.path);
-  next();
-});
-
-app.post('/order', async (req, res) => {
-  try {
-    const body = req.body;
-    const messageType = body?.message?.type;
-    console.log('Message type:', messageType);
-
-    // Only process end of call report
-    if (messageType !== 'end-of-call-report') {
-      console.log('Skipping non end-of-call event');
-      return res.json({ success: true, skipped: true });
-    }
-
-    const transcript = body?.message?.artifact?.transcript || '';
-    const customerName = extractName(transcript);
-    const items = extractItems(transcript);
-    const total = extractTotal(transcript);
-
-    console.log('Customer:', customerName);
-    console.log('Items:', items);
-    console.log('Total:', total);
-
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/orders`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      },
-      body: JSON.stringify({
-        customer_name: customerName,
-        items: items,
-        total: total,
-        location: 'Smalls Sliders'
-      })
-    });
-
-    console.log('Supabase response status:', response.status);
-    res.json({ success: true });
-
-  } catch (error) {
-    console.error('Error:', error.message);
-    res.json({ success: false, error: error.message });
-  }
-});
-
 function extractName(transcript) {
-  // Look for name patterns like "name is Max" or "put it under Max" or "it's Max"
+  // Look specifically for what comes after "What name should I put on the order?"
   const patterns = [
-    /(?:name\s+(?:is|should be|under|for)\s+)([A-Z][a-z]+)/i,
-    /(?:put it under|under the name|name for the order)\s+([A-Z][a-z]+)/i,
-    /(?:it'?s|this is|my name is)\s+([A-Z][a-z]+)/i,
-    /AI:\s*Perfect\s+([A-Z][a-z]+)/i,
-    /Perfect\s+([A-Z][a-z]+)!/i,
+    /Perfect\s+([A-Z][a-z]+)[!,]/i,
+    /(?:name for the order|put on the order|name should I put)[^.]*?\n\s*(?:Customer|User)?:?\s*([A-Z][a-z]+)/i,
+    /(?:Customer|User):\s*([A-Z][a-z]{2,})\s*\n.*?Perfect/is,
+    /my name is\s+([A-Z][a-z]+)/i,
+    /(?:it'?s|this is)\s+([A-Z][a-z]+)/i,
   ];
   for (const pattern of patterns) {
     const match = transcript.match(pattern);
-    if (match) return match[1];
+    if (match && match[1].toLowerCase() !== 'the' && 
+        match[1].toLowerCase() !== 'just' && 
+        match[1].toLowerCase() !== 'pay') {
+      return match[1];
+    }
   }
   return 'Guest';
 }
 
 function extractItems(transcript) {
   const items = [];
-  const menuItems = [
-    'Original Combo 1', 'Original Combo 2', 'Original Combo 3', 'Original Combo 4',
-    'Biggie Smalls Combo', 'BBQ Combo 1', 'BBQ Combo 2', 'BBQ Combo 3',
-    'BBQ Kids Combo', 'Original Slider', 'BBQ Bacon Jalapeno Slider',
-    'Waffle Fries', 'Queso', 'Chocolate Milkshake', 'Strawberry Milkshake',
-    'Cookies and Cream Milkshake', 'Smauce', 'Original Party Pack', 'Tray of Fries'
+
+  // Match combos first — if a combo is ordered, don't separately list fries
+  const comboPatterns = [
+    { pattern: /original combo (?:one|1)/i, name: 'Original Combo 1' },
+    { pattern: /original combo (?:two|2)/i, name: 'Original Combo 2' },
+    { pattern: /original combo (?:three|3)/i, name: 'Original Combo 3' },
+    { pattern: /original combo (?:four|4)/i, name: 'Original Combo 4' },
+    { pattern: /biggie smalls combo/i, name: 'Biggie Smalls Combo' },
+    { pattern: /bbq (?:bacon )?combo (?:one|1)/i, name: 'BBQ Combo 1' },
+    { pattern: /bbq (?:bacon )?combo (?:two|2)/i, name: 'BBQ Combo 2' },
+    { pattern: /bbq (?:bacon )?combo (?:three|3)/i, name: 'BBQ Combo 3' },
   ];
-  menuItems.forEach(item => {
-    if (transcript.toLowerCase().includes(item.toLowerCase())) {
-      items.push(item);
+
+  let hasCombo = false;
+  comboPatterns.forEach(({ pattern, name }) => {
+    if (pattern.test(transcript)) {
+      items.push(name);
+      hasCombo = true;
     }
   });
+
+  // Only add fries if no combo was ordered
+  if (!hasCombo && /waffle fries/i.test(transcript) && 
+      /(?:customer|user):.*waffle fries/i.test(transcript)) {
+    items.push('Waffle Fries');
+  }
+
+  // Add-ons — only if customer said yes
+  if (/(?:customer|user):.*(?:yes|yeah|sure|add).*(?:queso|cheese dip)/i.test(transcript) ||
+      /(?:customer|user):.*queso/i.test(transcript)) {
+    items.push('Queso');
+  }
+
+  const shakes = [
+    { pattern: /chocolate (?:milk)?shake/i, name: 'Chocolate Milkshake' },
+    { pattern: /strawberry (?:milk)?shake/i, name: 'Strawberry Milkshake' },
+    { pattern: /cookies and cream (?:milk)?shake/i, name: 'Cookies & Cream Milkshake' },
+  ];
+  shakes.forEach(({ pattern, name }) => {
+    if (pattern.test(transcript)) items.push(name);
+  });
+
+  // A la carte items only if customer explicitly ordered them
+  if (!hasCombo && /(?:customer|user):.*original slider/i.test(transcript)) {
+    items.push('Original Slider');
+  }
+  if (/(?:customer|user):.*bbq bacon/i.test(transcript)) {
+    items.push('BBQ Bacon Jalapeño Slider');
+  }
+  if (/party pack/i.test(transcript)) items.push('Original Party Pack');
+  if (/tray of fries/i.test(transcript)) items.push('Tray of Fries');
+
   return items.length > 0 ? items.join(', ') : 'See transcript';
 }
 
 function extractTotal(transcript) {
-  // Match spoken totals like "thirteen dollars and forty-nine cents" or "$13.49"
   const numericMatch = transcript.match(/\$?([\d]+\.[\d]{2})/);
   if (numericMatch) return numericMatch[1];
 
-  // Word to number map for common amounts
   const words = {
     'eight dollars and eleven cents': '8.11',
     'ten dollars and forty-nine cents': '10.49',
@@ -110,6 +93,8 @@ function extractTotal(transcript) {
     'three dollars and forty-nine cents': '3.49',
     'nine dollars and thirty-five cents': '9.35',
     'twenty-three dollars and ninety-seven cents': '23.97',
+    'twenty dollars and twenty-three cents': '20.23',
+    'eighteen dollars and forty-seven cents': '18.47',
   };
 
   const lower = transcript.toLowerCase();
@@ -119,10 +104,3 @@ function extractTotal(transcript) {
 
   return 'Pay at counter';
 }
-
-app.get('/', (req, res) => {
-  res.send('Smalls Sliders order webhook is running!');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
