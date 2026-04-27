@@ -57,26 +57,40 @@ app.post('/order', async (req, res) => {
 });
 
 function extractName(transcript) {
-  var patterns = [
-    /Perfect\s+([A-Z][a-z]+)[!,]/i,
-    /my name is\s+([A-Z][a-z]+)/i,
-    /it is\s+([A-Z][a-z]+)/i,
-    /this is\s+([A-Z][a-z]+)/i,
-    /its\s+([A-Z][a-z]+)/i,
-  ];
-  var skip = ['the', 'just', 'pay', 'your', 'all', 'set', 'see', 'you', 'soon'];
-  for (var i = 0; i < patterns.length; i++) {
-    var match = transcript.match(patterns[i]);
-    if (match && skip.indexOf(match[1].toLowerCase()) === -1) {
-      return match[1];
+  var lines = transcript.split('\n');
+  var nameQuestion = false;
+  var skip = ['the', 'just', 'pay', 'your', 'all', 'set', 'see', 'you', 'soon', 'it', 'is', 'my', 'choice', 'good', 'yes', 'no', 'okay', 'sure', 'great'];
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].toLowerCase();
+
+    if (line.indexOf('name should i put') !== -1 ||
+        line.indexOf('name for the order') !== -1 ||
+        line.indexOf('what name') !== -1) {
+      nameQuestion = true;
+      continue;
+    }
+
+    if (nameQuestion && (line.indexOf('customer:') !== -1 || line.indexOf('user:') !== -1)) {
+      var nameLine = lines[i].replace(/customer:|user:/gi, '').trim();
+      var firstName = nameLine.split(' ')[0].trim();
+      if (firstName.length > 1 && skip.indexOf(firstName.toLowerCase()) === -1) {
+        return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+      }
+    }
+
+    if (nameQuestion && line.indexOf('sam:') !== -1) {
+      nameQuestion = false;
     }
   }
+
   return 'Guest';
 }
 
 function extractItems(transcript) {
   var items = [];
   var hasCombo = false;
+  var lower = transcript.toLowerCase();
 
   var combos = [
     { pattern: 'original combo one', name: 'Original Combo 1' },
@@ -95,8 +109,6 @@ function extractItems(transcript) {
     { pattern: 'bbq combo 2', name: 'BBQ Combo 2' },
     { pattern: 'bbq combo 3', name: 'BBQ Combo 3' },
   ];
-
-  var lower = transcript.toLowerCase();
 
   combos.forEach(function(combo) {
     if (lower.indexOf(combo.pattern) !== -1) {
