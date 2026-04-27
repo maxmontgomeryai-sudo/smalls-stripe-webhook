@@ -1,17 +1,73 @@
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+app.use((req, res, next) => {
+  console.log('Method:', req.method, '| Path:', req.path);
+  next();
+});
+
+app.post('/order', async (req, res) => {
+  try {
+    const body = req.body;
+    const messageType = body && body.message && body.message.type;
+    console.log('Message type:', messageType);
+
+    if (messageType !== 'end-of-call-report') {
+      console.log('Skipping non end-of-call event');
+      return res.json({ success: true, skipped: true });
+    }
+
+    const transcript = (body.message.artifact && body.message.artifact.transcript) || '';
+    console.log('Transcript length:', transcript.length);
+
+    const customerName = extractName(transcript);
+    const items = extractItems(transcript);
+    const total = extractTotal(transcript);
+
+    console.log('Customer:', customerName);
+    console.log('Items:', items);
+    console.log('Total:', total);
+
+    const response = await fetch(SUPABASE_URL + '/rest/v1/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY
+      },
+      body: JSON.stringify({
+        customer_name: customerName,
+        items: items,
+        total: total,
+        location: 'Smalls Sliders'
+      })
+    });
+
+    console.log('Supabase status:', response.status);
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error('Error:', error.message);
+    res.json({ success: false, error: error.message });
+  }
+});
+
 function extractName(transcript) {
-  // Look specifically for what comes after "What name should I put on the order?"
-  const patterns = [
+  var patterns = [
     /Perfect\s+([A-Z][a-z]+)[!,]/i,
-    /(?:name for the order|put on the order|name should I put)[^.]*?\n\s*(?:Customer|User)?:?\s*([A-Z][a-z]+)/i,
-    /(?:Customer|User):\s*([A-Z][a-z]{2,})\s*\n.*?Perfect/is,
     /my name is\s+([A-Z][a-z]+)/i,
-    /(?:it'?s|this is)\s+([A-Z][a-z]+)/i,
+    /it is\s+([A-Z][a-z]+)/i,
+    /this is\s+([A-Z][a-z]+)/i,
+    /its\s+([A-Z][a-z]+)/i,
   ];
-  for (const pattern of patterns) {
-    const match = transcript.match(pattern);
-    if (match && match[1].toLowerCase() !== 'the' && 
-        match[1].toLowerCase() !== 'just' && 
-        match[1].toLowerCase() !== 'pay') {
+  var skip = ['the', 'just', 'pay', 'your', 'all', 'set', 'see', 'you', 'soon'];
+  for (var i = 0; i < patterns.length; i++) {
+    var match = transcript.match(patterns[i]);
+    if (match && skip.indexOf(match[1].toLowerCase()) === -1) {
       return match[1];
     }
   }
@@ -19,67 +75,53 @@ function extractName(transcript) {
 }
 
 function extractItems(transcript) {
-  const items = [];
+  var items = [];
+  var hasCombo = false;
 
-  // Match combos first — if a combo is ordered, don't separately list fries
-  const comboPatterns = [
-    { pattern: /original combo (?:one|1)/i, name: 'Original Combo 1' },
-    { pattern: /original combo (?:two|2)/i, name: 'Original Combo 2' },
-    { pattern: /original combo (?:three|3)/i, name: 'Original Combo 3' },
-    { pattern: /original combo (?:four|4)/i, name: 'Original Combo 4' },
-    { pattern: /biggie smalls combo/i, name: 'Biggie Smalls Combo' },
-    { pattern: /bbq (?:bacon )?combo (?:one|1)/i, name: 'BBQ Combo 1' },
-    { pattern: /bbq (?:bacon )?combo (?:two|2)/i, name: 'BBQ Combo 2' },
-    { pattern: /bbq (?:bacon )?combo (?:three|3)/i, name: 'BBQ Combo 3' },
+  var combos = [
+    { pattern: 'original combo one', name: 'Original Combo 1' },
+    { pattern: 'original combo two', name: 'Original Combo 2' },
+    { pattern: 'original combo three', name: 'Original Combo 3' },
+    { pattern: 'original combo four', name: 'Original Combo 4' },
+    { pattern: 'original combo 1', name: 'Original Combo 1' },
+    { pattern: 'original combo 2', name: 'Original Combo 2' },
+    { pattern: 'original combo 3', name: 'Original Combo 3' },
+    { pattern: 'original combo 4', name: 'Original Combo 4' },
+    { pattern: 'biggie smalls combo', name: 'Biggie Smalls Combo' },
+    { pattern: 'bbq combo one', name: 'BBQ Combo 1' },
+    { pattern: 'bbq combo two', name: 'BBQ Combo 2' },
+    { pattern: 'bbq combo three', name: 'BBQ Combo 3' },
+    { pattern: 'bbq combo 1', name: 'BBQ Combo 1' },
+    { pattern: 'bbq combo 2', name: 'BBQ Combo 2' },
+    { pattern: 'bbq combo 3', name: 'BBQ Combo 3' },
   ];
 
-  let hasCombo = false;
-  comboPatterns.forEach(({ pattern, name }) => {
-    if (pattern.test(transcript)) {
-      items.push(name);
+  var lower = transcript.toLowerCase();
+
+  combos.forEach(function(combo) {
+    if (lower.indexOf(combo.pattern) !== -1) {
+      items.push(combo.name);
       hasCombo = true;
     }
   });
 
-  // Only add fries if no combo was ordered
-  if (!hasCombo && /waffle fries/i.test(transcript) && 
-      /(?:customer|user):.*waffle fries/i.test(transcript)) {
-    items.push('Waffle Fries');
-  }
-
-  // Add-ons — only if customer said yes
-  if (/(?:customer|user):.*(?:yes|yeah|sure|add).*(?:queso|cheese dip)/i.test(transcript) ||
-      /(?:customer|user):.*queso/i.test(transcript)) {
-    items.push('Queso');
-  }
-
-  const shakes = [
-    { pattern: /chocolate (?:milk)?shake/i, name: 'Chocolate Milkshake' },
-    { pattern: /strawberry (?:milk)?shake/i, name: 'Strawberry Milkshake' },
-    { pattern: /cookies and cream (?:milk)?shake/i, name: 'Cookies & Cream Milkshake' },
-  ];
-  shakes.forEach(({ pattern, name }) => {
-    if (pattern.test(transcript)) items.push(name);
-  });
-
-  // A la carte items only if customer explicitly ordered them
-  if (!hasCombo && /(?:customer|user):.*original slider/i.test(transcript)) {
-    items.push('Original Slider');
-  }
-  if (/(?:customer|user):.*bbq bacon/i.test(transcript)) {
-    items.push('BBQ Bacon Jalapeño Slider');
-  }
+  if (/chocolate (?:milk)?shake/i.test(transcript)) items.push('Chocolate Milkshake');
+  if (/strawberry (?:milk)?shake/i.test(transcript)) items.push('Strawberry Milkshake');
+  if (/cookies and cream (?:milk)?shake/i.test(transcript)) items.push('Cookies & Cream Milkshake');
+  if (/queso/i.test(transcript) && /customer:.*queso/i.test(transcript)) items.push('Queso');
+  if (!hasCombo && /waffle fries/i.test(transcript)) items.push('Waffle Fries');
   if (/party pack/i.test(transcript)) items.push('Original Party Pack');
   if (/tray of fries/i.test(transcript)) items.push('Tray of Fries');
+  if (!hasCombo && /original slider/i.test(transcript)) items.push('Original Slider');
 
   return items.length > 0 ? items.join(', ') : 'See transcript';
 }
 
 function extractTotal(transcript) {
-  const numericMatch = transcript.match(/\$?([\d]+\.[\d]{2})/);
+  var numericMatch = transcript.match(/\$?([\d]+\.[\d]{2})/);
   if (numericMatch) return numericMatch[1];
 
-  const words = {
+  var words = {
     'eight dollars and eleven cents': '8.11',
     'ten dollars and forty-nine cents': '10.49',
     'thirteen dollars and forty-nine cents': '13.49',
@@ -94,13 +136,22 @@ function extractTotal(transcript) {
     'nine dollars and thirty-five cents': '9.35',
     'twenty-three dollars and ninety-seven cents': '23.97',
     'twenty dollars and twenty-three cents': '20.23',
-    'eighteen dollars and forty-seven cents': '18.47',
+    'eighteen dollars and forty-seven cents': '18.47'
   };
 
-  const lower = transcript.toLowerCase();
-  for (const [phrase, value] of Object.entries(words)) {
-    if (lower.includes(phrase)) return value;
+  var lower = transcript.toLowerCase();
+  for (var phrase in words) {
+    if (lower.indexOf(phrase) !== -1) return words[phrase];
   }
 
   return 'Pay at counter';
 }
+
+app.get('/', (req, res) => {
+  res.send('Smalls Sliders order webhook is running!');
+});
+
+var PORT = process.env.PORT || 3000;
+app.listen(PORT, function() {
+  console.log('Server running on port ' + PORT);
+});
