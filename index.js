@@ -5,11 +5,9 @@ app.use(express.json());
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// Map Vapi assistant IDs to restaurant names
-// Add each new restaurant's assistant ID here
 const ASSISTANT_MAP = {
   '5a07b55c-874a-4df7-b3ca-1c5e4a434c9f': 'Smalls Sliders',
-  // 'WAKA_HOUSE_ASSISTANT_ID': 'Waka House',
+  '31f48680-6ab3-4005-8479-c7454eba6f0d': 'Waka House',
 };
 
 app.use((req, res, next) => {
